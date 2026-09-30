@@ -1,0 +1,45 @@
+# Business context for the Chinook demo (PostgreSQL build, snake_case identifiers).
+tables:
+  invoice:
+    description: One row per customer purchase (order header).
+    columns:
+      total: Invoice amount in USD, taxes included.
+      invoice_date: When the purchase happened. Use this for any time-based sales question.
+      billing_country: Country the invoice was billed to. Use for "sales by country".
+  invoice_line:
+    description: Individual tracks bought on an invoice.
+    columns:
+      unit_price: Price paid per unit in USD.
+  customer:
+    columns:
+      support_rep_id: Employee (sales support agent) responsible for this customer.
+  employee:
+    columns:
+      reports_to: Manager's employee_id.
+  track:
+    columns:
+      milliseconds: Track duration in milliseconds.
+
+glossary:
+  - term: revenue / sales
+    definition: SUM(invoice.total), or SUM(invoice_line.unit_price * invoice_line.quantity) when broken down by track, album, artist or genre.
+  - term: units sold
+    definition: SUM(invoice_line.quantity)
+
+examples:
+  - question: Revenue per artist
+    sql: |
+      SELECT ar.name AS artist, SUM(il.unit_price * il.quantity) AS revenue
+      FROM invoice_line il
+      JOIN track t ON t.track_id = il.track_id
+      JOIN album al ON al.album_id = t.album_id
+      JOIN artist ar ON ar.artist_id = al.artist_id
+      GROUP BY ar.name
+      ORDER BY revenue DESC
+
+masked_columns:
+  - customer.email
+  - customer.phone
+  - customer.fax
+  - employee.email
+  - employee.phone

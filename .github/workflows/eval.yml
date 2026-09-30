@@ -1,0 +1,30 @@
+name: Eval
+
+# Runs the execution-accuracy suite against the real model. Manual only: it spends API credits.
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: Only run the first N cases (empty = all)
+        required: false
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen
+      - name: Run suite
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          LIMIT: ${{ inputs.limit }}
+        run: uv run sqlagent eval evals/chinook.yaml ${LIMIT:+--limit $LIMIT} --min-accuracy 0.8
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-results
+          path: backend/evals/results/

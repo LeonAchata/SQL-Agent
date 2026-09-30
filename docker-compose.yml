@@ -1,0 +1,42 @@
+# One command demo: PostgreSQL with the Chinook dataset, the agent API and the web UI.
+#   ANTHROPIC_API_KEY=sk-ant-... docker compose up --build
+# then open http://localhost:3000
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ./demo/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "psql -U postgres -d chinook -c 'SELECT 1 FROM album LIMIT 1'"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build: ./backend
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?Set ANTHROPIC_API_KEY}
+      # Read-only role created by demo/postgres/02-readonly-role.sql
+      SQLAGENT_DATABASE_URL: postgresql+psycopg://sqlagent_ro:sqlagent_ro@db:5432/chinook
+      SQLAGENT_SCHEMAS: '["public"]'
+      SQLAGENT_SEMANTIC_LAYER_PATH: semantic/chinook.postgres.yaml
+      SQLAGENT_CHECKPOINT_PATH: /tmp/threads.sqlite
+      SQLAGENT_CORS_ORIGINS: '["http://localhost:3000"]'
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy

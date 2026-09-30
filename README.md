@@ -1,249 +1,170 @@
-# 🏠 Real Estate Chatbot - SQL Agent
+# SQL Agent
 
-Chatbot conversacional para búsqueda de propiedades inmobiliarias usando LangGraph, OpenAI y PostgreSQL.
+**Ask any SQL database questions in plain language.** SQL Agent introspects your schema, writes dialect-correct SQL with Claude, checks it against a SQL parser (AST) before anything runs, executes it read-only and explains the result, with a chart when one helps. Every step streams live to the UI.
 
-## 📋 Descripción
+[![CI](https://github.com/LeonAchata/SQL-Chatbot/actions/workflows/ci.yml/badge.svg)](https://github.com/LeonAchata/SQL-Chatbot/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
+![LangGraph](https://img.shields.io/badge/LangGraph-1.x-1C3C3C)
+![Claude](https://img.shields.io/badge/LLM-Claude-D97757)
+![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs)
+![License](https://img.shields.io/badge/license-MIT-blue)
 
-Sistema de agente inteligente que guía al usuario en la búsqueda de departamentos mediante una conversación natural. Recopila 5 filtros esenciales (distrito, área mínima, estado, presupuesto, dormitorios) y hasta 3 filtros opcionales (pet-friendly, balcón, terraza, amoblado, baños) para generar y ejecutar consultas SQL dinámicamente contra una base de datos PostgreSQL.
+![SQL Agent UI](docs/ui.png)
 
-## 🛠️ Stack Tecnológico
+## Why this is different
 
-- **Backend**: Python 3.11+, FastAPI, Uvicorn
-- **AI/ML**: LangChain, LangGraph, OpenAI GPT-4
-- **Base de Datos**: PostgreSQL, asyncpg
-- **Frontend**: HTML5, CSS3, JavaScript (Vanilla)
-- **Validación**: Pydantic V2
+Most text-to-SQL demos paste a hard-coded schema into a prompt and run whatever comes back. This project is built the way you would put it in front of real users:
 
-## 📁 Estructura del Proyecto
+- **Works with any schema.** The schema catalog is built at startup through SQLAlchemy introspection: tables, views, columns, types, primary and foreign keys, comments and sample values. Drivers for PostgreSQL, MySQL/MariaDB and SQLite are included; SQL Server, Snowflake and other SQLAlchemy dialects need only their driver.
+- **Scales to large schemas.** Small databases send the full schema. Above a configurable threshold, the agent first picks the relevant tables from a compact index, then expands one foreign-key hop so joins still work. Only those tables are described in detail.
+- **Defence in depth.** SQL is never trusted:
+  1. **AST guard** ([sqlglot](https://github.com/tobymao/sqlglot)): exactly one read-only statement, no DDL/DML/`SELECT INTO`/`PRAGMA`/`SET`, only tables from the catalog, and a deny-list of dangerous functions (`pg_sleep`, `pg_read_file`, `dblink`, `load_extension`, `xp_cmdshell`, …). It also enforces a row limit, emitted in the right dialect (`LIMIT`, `TOP`, `FETCH`).
+  2. **Read-only execution**: read-only transactions, statement timeouts (Postgres `statement_timeout`, MySQL `max_execution_time`, a SQLite progress handler) and an unconditional rollback.
+  3. **Least-privilege role**: the Docker demo connects as a `SELECT`-only Postgres role.
+  4. **PII masking**: columns listed in the semantic layer are never sampled into prompts and are redacted in results.
+- **Self-correcting.** Guard rejections and database errors are fed back to the model, which repairs the query (up to `max_attempts`).
+- **Asks when it should.** Genuinely ambiguous questions get a clarifying question instead of a guess, and follow-ups ("and in 2012?") are resolved against the conversation and the previous SQL.
+- **Semantic layer.** Optional YAML with table and column descriptions, a business glossary ("revenue = …") and verified example queries.
+- **Measured, not assumed.** An execution-accuracy benchmark compares the agent's results with hand-written gold SQL. Extra columns are tolerated and order is checked only when it matters.
+- **Built for production.** Persistent conversations (LangGraph SQLite checkpointer), SSE streaming, prompt caching of the schema context, typed code (`mypy --strict`), 40+ tests that need no API key, CI and Docker.
 
-```
-real_estate_agent/
-├── models/
-│   ├── settings.py          # Configuración con Pydantic V2 (env vars)
-│   ├── state.py             # AgentState - Estado conversacional
-│   └── schemas.py           # Schemas FastAPI (Request/Response)
-├── tools/
-│   ├── property_tools.py    # Tools para filtros (extracción, preguntas)
-│   └── sql_tools.py         # Tools para SQL (generación, validación, ejecución)
-├── prompts/
-│   ├── system_prompts.py    # Prompts del sistema para LLM
-│   └── examples.py          # Few-shot examples
-├── nodes/
-│   ├── __init__.py          # Exporta todos los nodos
-│   ├── receive_message.py   # Recibe mensaje del usuario
-│   ├── extract_filters.py   # Extrae filtros con LLM
-│   ├── check_completion.py  # Verifica completitud (Router)
-│   ├── ask_missing_filter.py    # Pregunta por filtro faltante
-│   ├── ask_additional.py    # Pregunta por filtros opcionales
-│   ├── collect_optional.py  # Recolecta opcionales (Router)
-│   ├── generate_sql.py      # Genera SQL con LLM
-│   ├── validate_sql.py      # Valida seguridad SQL (Router)
-│   ├── execute_sql.py       # Ejecuta query en PostgreSQL
-│   └── format_results.py    # Formatea respuesta final
-├── db/
-│   ├── __init__.py          # Expone instancia global `db`
-│   └── connection.py        # DatabaseManager con asyncpg
-├── frontend/
-│   ├── index.html           # UI del chatbot
-│   ├── style.css            # Estilos minimalistas
-│   └── script.js            # Lógica y API calls
-├── pipeline.py              # StateGraph + SessionManager
-├── main.py                  # FastAPI app (ejecutable)
-├── dependencies.py          # Dependencias FastAPI
-├── .env                     # Variables de entorno
-├── requirements.txt         # Dependencias Python
-└── README.md
+## Architecture
+
+```mermaid
+flowchart LR
+    Q([User question]) --> P[plan<br/><i>intent, tables,<br/>standalone question</i>]
+    P -->|clarify / out of scope| R([reply])
+    P -->|query| G[generate_sql]
+    G --> V{validate_sql<br/><i>sqlglot AST guard</i>}
+    V -->|rejected| G
+    V -->|ok| E{execute_sql<br/><i>read-only, timeout,<br/>row cap, masking</i>}
+    E -->|DB error| G
+    E -->|rows| A[answer<br/><i>summary + chart spec</i>]
+    G -. max attempts .-> F([give up])
 ```
 
-## 🔄 Flujo del Agente (StateGraph)
+| Layer | Tech |
+| --- | --- |
+| Agent orchestration | LangGraph `StateGraph` + checkpointer (per-thread memory) |
+| LLM | Claude via the official `anthropic` SDK: structured outputs, prompt caching and server-side refusal fallbacks. The `LLM` protocol lets you plug in another provider. |
+| Schema & execution | SQLAlchemy 2 (introspection, pooling, dialects) |
+| SQL safety | sqlglot (parse, inspect, transpile) |
+| API | FastAPI + Server-Sent Events |
+| UI | Next.js 16, React 19, Tailwind 4, Recharts |
+| Tooling | uv, ruff, mypy (strict), pytest, GitHub Actions, Docker Compose |
 
-```
-START → receive_message → extract_filters → check_completion
-                                                    ↓
-                            ┌───────────────────────┴───────────────────┐
-                            ↓                                           ↓
-                  ask_missing_filter                      ask_additional_filters
-                            ↓                                           ↓
-                          END                              collect_optional_filters
-                                                                        ↓
-                                                        ┌───────────────┴──────────┐
-                                                        ↓                          ↓
-                                                extract_filters              generate_sql
-                                                (más opcionales)                   ↓
-                                                                            validate_sql
-                                                                                   ↓
-                                                                    ┌──────────────┴─────────┐
-                                                                    ↓                        ↓
-                                                            execute_sql              format_results
-                                                                    ↓                      (error)
-                                                            format_results
-                                                                    ↓
-                                                                  END
-```
+## Quick start
 
-**Routers (Conditional Edges):**
-- `check_completion`: Filtros completos → adicionales | incompletos → pregunta
-- `collect_optional`: Listo → SQL | no listo → más filtros
-- `validate_sql`: Válido → ejecutar | inválido → error
-
-## 🚀 Instalación y Ejecución
-
-### Requisitos
-- Python 3.11+
-- PostgreSQL 15+
-- OpenAI API Key
-
-### Setup
+### Docker (Postgres demo, one command)
 
 ```bash
-# 1. Clonar repositorio
-git clone <repo-url>
-cd real_estate_agent
-
-# 2. Instalar dependencias
-pip install -r requirements.txt
-
-# 3. Configurar .env
-cp .env.example .env
-# Editar .env con tus credenciales:
-# - OPENAI_API_KEY
-# - DATABASE_URL
-# - DATABASE_SCHEMA
-
-# 4. Ejecutar backend
-python main.py
+export ANTHROPIC_API_KEY=sk-ant-...
+docker compose up --build
 ```
 
-Backend disponible en: `http://localhost:8000`
-Docs: `http://localhost:8000/docs`
+Open <http://localhost:3000>. This starts PostgreSQL with the [Chinook](https://github.com/lerocha/chinook-database) music-store dataset, the API (connected as a read-only role) and the web UI.
 
-### Frontend
+### Local development
 
 ```bash
-# Abrir frontend/index.html en navegador
-# O usar Live Server en VS Code
+# Backend (Python 3.11+, uv)
+cd backend
+uv sync --all-extras
+cp ../.env.example .env        # set ANTHROPIC_API_KEY
+uv run sqlagent chat            # interactive terminal session on the bundled SQLite Chinook
+uv run sqlagent serve --reload  # API on http://localhost:8000
+
+# Frontend
+cd frontend
+npm install
+npm run dev                     # http://localhost:3000
 ```
 
-## 📡 API Endpoints
-
-| Método | Endpoint | Descripción |
-|--------|----------|-------------|
-| `POST` | `/chat` | Enviar mensaje del usuario |
-| `GET` | `/properties/{session_id}` | Obtener propiedades encontradas |
-| `GET` | `/session/{session_id}` | Info de sesión (debug) |
-| `POST` | `/session/{session_id}/reset` | Reiniciar sesión |
-| `GET` | `/health` | Health check |
-
-### Ejemplo Request/Response
-
-**POST /chat**
-```json
-// Request
-{
-  "session_id": "uuid-opcional",
-  "message": "Busco departamento en San Isidro"
-}
-
-// Response
-{
-  "session_id": "uuid",
-  "response": "¿Cuál es el área mínima que necesitas?",
-  "filters": {
-    "distrito": "San Isidro",
-    "area_min": null,
-    "essential_count": 1,
-    "is_complete": false
-  },
-  "ready_to_search": false,
-  "properties_found": null
-}
-```
-
-## 🗄️ Esquema de Base de Datos
-
-Schema: `property_infrastructure`
-
-**Tablas principales:**
-- `propiedad`: Propiedades (departamentos, locales, etc.)
-- `edificio`: Edificios/complejos
-
-**Campos clave en `propiedad`:**
-- numero, piso, tipo, area, dormitorios, banios
-- balcon, terraza, amoblado, permite_mascotas
-- valor_comercial, estado
-- edificio_id (FK → edificio.id)
-
-**Campos clave en `edificio`:**
-- nombre, direccion, distrito
-
-## 🔑 Variables de Entorno (.env)
+Point it at your own database:
 
 ```bash
-# OpenAI
-OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-4o-mini
-OPENAI_TEMPERATURE=0
-
-# PostgreSQL
-DATABASE_URL=postgresql://user:pass@host:port/dbname
-DATABASE_SCHEMA=property_infrastructure
-
-# Configuración
-MAX_OPTIONAL_FILTERS=3
-PROPERTIES_LIMIT=5
-SESSION_TIMEOUT=3600
-
-# API
-API_HOST=0.0.0.0
-API_PORT=8000
+SQLAGENT_DATABASE_URL="postgresql+psycopg://readonly:***@host:5432/analytics" \
+SQLAGENT_SCHEMAS='["sales","public"]' \
+uv run sqlagent ask "Top 10 products by revenue last quarter"
 ```
 
-## 🧠 Características Clave
+### CLI
 
-- ✅ **Sesiones persistentes**: Mantiene contexto entre mensajes (en memoria)
-- ✅ **SQL seguro**: Validación estricta (solo SELECT, sin SQL injection)
-- ✅ **Conversacional**: Extrae múltiples filtros de un solo mensaje
-- ✅ **Corrección automática**: Reintenta SQL hasta 3 veces si falla
-- ✅ **Límites configurables**: 5 esenciales + máx 3 opcionales
-- ✅ **Async/await**: Pool de conexiones asyncpg
-- ✅ **Type-safe**: Pydantic V2 en todo el proyecto
+| Command | What it does |
+| --- | --- |
+| `sqlagent schema` | Print the catalog the agent sees (keys, comments, sample values) |
+| `sqlagent ask "…"` | One-shot question with the full trace |
+| `sqlagent chat` | Multi-turn terminal session |
+| `sqlagent serve` | Run the HTTP API |
+| `sqlagent eval [suite.yaml]` | Execution-accuracy benchmark |
 
-## 🐳 Docker (Opcional)
+## Configuration
 
-```dockerfile
-FROM python:3.11-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-COPY . .
-CMD ["python", "main.py"]
+All settings are environment variables prefixed with `SQLAGENT_` (or a `.env` file). See [`.env.example`](.env.example).
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DATABASE_URL` | bundled SQLite Chinook | Any SQLAlchemy URL |
+| `SCHEMAS` / `INCLUDE_TABLES` / `EXCLUDE_TABLES` | all | What the agent may see and query |
+| `MAX_ROWS` | `200` | Row cap enforced in SQL and at fetch time |
+| `STATEMENT_TIMEOUT_MS` | `15000` | Per-query timeout |
+| `MAX_ATTEMPTS` | `3` | Generate/repair attempts per question |
+| `FULL_SCHEMA_THRESHOLD` | `40` | Above this many tables, select tables before writing SQL |
+| `SEMANTIC_LAYER_PATH` | none | YAML with descriptions, glossary, examples, masked columns |
+| `MODEL` / `EFFORT` | `claude-opus-5-5` / `medium` | Claude model and effort level |
+
+See [`backend/semantic/chinook.postgres.yaml`](backend/semantic/chinook.postgres.yaml) for a semantic layer example.
+
+## API
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/api/chat` | `{ "message": "...", "thread_id": "optional" }`. Returns an SSE stream of `thread`, `plan`, `sql`, `retry`, `validated`, `result`, `answer` and `done` events. |
+| `GET` | `/api/threads/{id}` | Conversation history |
+| `GET` | `/api/schema` | Catalog summary for the UI |
+| `GET` | `/health` | Liveness |
+
+## Evaluation
+
+[`backend/evals/chinook.yaml`](backend/evals/chinook.yaml) holds 25 questions, from simple counts to multi-join aggregations, self-joins, anti-joins and time series, each with gold SQL. A case passes when the agent's result contains the gold result:
+
+- each gold column must map to a distinct returned column with the same values;
+- numbers are compared at 2-decimal precision;
+- rows are compared as a multiset, or in order when the question implies an ordering.
+
+```bash
+cd backend && uv run sqlagent eval --min-accuracy 0.8
 ```
 
-## 📝 Notas Técnicas
+The suite can also be triggered manually in GitHub Actions (`Eval` workflow). It needs an `ANTHROPIC_API_KEY` secret, since it calls the real model.
 
-- **LangGraph**: StateGraph con 10 nodos + 3 routers condicionales
-- **Pydantic V2**: BaseModel y BaseSettings (no TypedDict)
-- **SessionManager**: En memoria con timeout automático (1 hora)
-- **Tools**: Decorador `@tool` de LangChain
-- **CORS**: Habilitado para desarrollo local
+## Project structure
 
-## 🔧 Troubleshooting
+```
+backend/
+  src/sqlagent/
+    agent/        graph.py (LangGraph state machine), prompts, structured output schemas
+    db/           catalog.py (introspection), executor.py (read-only execution)
+    safety/       guard.py (sqlglot AST validation)
+    llm/          provider protocol + Claude implementation
+    semantic.py   semantic layer
+    service.py    wiring + event stream
+    api.py        FastAPI + SSE
+    cli.py        Typer CLI
+    evals.py      execution-accuracy harness
+  tests/          unit + integration tests (fake LLM, no API key needed)
+  evals/          benchmark suites
+frontend/         Next.js UI (schema explorer, live trace, results table, charts)
+demo/postgres/    Chinook dataset + read-only role for Docker
+```
 
-**Error: 'dict' object has no attribute 'last_updated'**
-- LangGraph retorna dict, se convierte a AgentState en `process_user_message`
+## Roadmap
 
-**Error: SQL injection detected**
-- Validación bloqueando query legítimo → revisar `validate_sql_node`
+- Embedding-based table retrieval for very large warehouses (1,000+ tables)
+- Adapters for other LLM providers
+- Query result caching and cost/latency tracing (OpenTelemetry)
+- Auth and per-user row-level security passthrough
 
-**Error: No properties found**
-- Verificar datos en PostgreSQL schema `property_infrastructure`
-- Revisar filtros generados en logs
+## License
 
-**Frontend no conecta**
-- Verificar CORS en main.py
-- Cambiar `API_URL` en script.js si backend no está en localhost:8000
-
-
-Autor:
-
-León Achata 
+MIT © Leon Achata

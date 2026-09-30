@@ -1,0 +1,100 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #fafaf9;
+  --surface: #ffffff;
+  --surface-2: #f4f3f1;
+  --border: #e6e4e0;
+  --fg: #1c1b1a;
+  --muted: #6f6b66;
+  --accent: #c2410c;
+  --accent-soft: #fdf1ea;
+  --ok: #15803d;
+  --warn: #b45309;
+  --danger: #b91c1c;
+  --code-bg: #f6f5f3;
+  --chart-1: #c2410c;
+  --chart-2: #2563eb;
+  --chart-3: #0f766e;
+  --chart-4: #7c3aed;
+  --chart-5: #a16207;
+  --chart-6: #be185d;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111110;
+    --surface: #191918;
+    --surface-2: #222120;
+    --border: #2e2d2b;
+    --fg: #eeeeec;
+    --muted: #a19d97;
+    --accent: #fb923c;
+    --accent-soft: #2a1a10;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --danger: #f87171;
+    --code-bg: #1d1c1b;
+    --chart-1: #fb923c;
+    --chart-2: #60a5fa;
+    --chart-3: #2dd4bf;
+    --chart-4: #a78bfa;
+    --chart-5: #facc15;
+    --chart-6: #f472b6;
+  }
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+  --color-code: var(--code-bg);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.prose-answer p {
+  margin: 0.4rem 0;
+}
+.prose-answer ul,
+.prose-answer ol {
+  margin: 0.4rem 0;
+  padding-left: 1.25rem;
+  list-style: disc;
+}
+.prose-answer ol {
+  list-style: decimal;
+}
+.prose-answer strong {
+  font-weight: 600;
+}
+.prose-answer code {
+  font-family: var(--font-geist-mono);
+  font-size: 0.85em;
+  background: var(--code-bg);
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+}
+.prose-answer table {
+  font-size: 0.85rem;
+  margin: 0.5rem 0;
+}
+.prose-answer th,
+.prose-answer td {
+  border-bottom: 1px solid var(--border);
+  padding: 0.25rem 0.6rem;
+  text-align: left;
+}
