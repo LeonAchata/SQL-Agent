@@ -167,4 +167,8 @@ demo/postgres/    Chinook dataset + read-only role for Docker
 
 ## License
 
-MIT © Leon Achata
+MIT 
+
+## Author
+
+- Leon Achata
